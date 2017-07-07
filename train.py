@@ -43,7 +43,7 @@ parser.add_argument('-input_feed', type=int, default=1,
                     additional input (via concatenation with the word
                     embeddings) to the decoder.""")
 parser.add_argument('-rnn_type', type=str, default='LSTM',
-                    choices=['LSTM', 'GRU'],
+                    choices=['LSTM', 'GRU', 'KNN'],
                     help="""The gate type to use in the RNNs""")
 # parser.add_argument('-residual',   action="store_true",
 #                     help="Add residual connections between RNN layers.")
@@ -409,6 +409,15 @@ def main():
             print('Intializing params')
             for p in model.parameters():
                 p.data.uniform_(-opt.param_init, opt.param_init)
+        else:
+            print('Intializing params')
+            for p in model.parameters():
+                print p.data.size()
+                if p.dim() == 2:
+                    val_range = (3.0/p.size(1))**0.5
+                    p.data.uniform_(-val_range, val_range)
+                else:
+                    p.data.zero_()
 
         encoder.embeddings.load_pretrained_vectors(opt.pre_word_vecs_enc)
         decoder.embeddings.load_pretrained_vectors(opt.pre_word_vecs_dec)
