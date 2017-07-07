@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.autograd import Variable
 import onmt
 import onmt.modules
+from onmt.modules import FastKNN
 from onmt.modules import aeq
 from onmt.modules.Gate import ContextGateFactory
 from torch.nn.utils.rnn import pad_packed_sequence as unpack
@@ -116,7 +117,12 @@ class Encoder(nn.Module):
                 [onmt.modules.TransformerEncoder(self.hidden_size, opt)
                  for i in range(opt.layers)])
         else:
-            self.rnn = getattr(nn, opt.rnn_type)(
+            rnn_type = nn.LSTM
+            if opt.rnn_type == "GRU":
+                rnn_type = nn.GRU
+            elif opt.rnn_type == "KNN":
+                rnn_type = FastKNN
+            self.rnn = rnn_type(
                  input_size, self.hidden_size,
                  num_layers=opt.layers,
                  dropout=opt.dropout,
@@ -159,13 +165,13 @@ class Encoder(nn.Module):
         else:
             # Standard RNN encoder.
             packed_emb = emb
-            if lengths is not None:
-                # Lengths data is wrapped inside a Variable.
-                lengths = lengths.data.view(-1).tolist()
-                packed_emb = pack(emb, lengths)
+            #if lengths is not None:
+            #    # Lengths data is wrapped inside a Variable.
+            #    lengths = lengths.data.view(-1).tolist()
+            #    packed_emb = pack(emb, lengths)
             outputs, hidden_t = self.rnn(packed_emb, hidden)
-            if lengths:
-                outputs = unpack(outputs)[0]
+            #if lengths:
+            #    outputs = unpack(outputs)[0]
             return hidden_t, outputs
 
 
@@ -199,8 +205,10 @@ class Decoder(nn.Module):
         else:
             if opt.rnn_type == "LSTM":
                 stackedCell = onmt.modules.StackedLSTM
-            else:
+            elif opt.rnn_type == "GRU":
                 stackedCell = onmt.modules.StackedGRU
+            else:
+                stackedCell = onmt.modules.StackedFastKNN
             self.rnn = stackedCell(opt.layers, input_size,
                                    opt.rnn_size, opt.dropout)
             self.context_gate = None
