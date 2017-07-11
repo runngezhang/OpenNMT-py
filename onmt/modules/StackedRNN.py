@@ -64,9 +64,9 @@ class StackedGRU(nn.Module):
 
 
 class FastKNNCell(nn.Module):
-    def __init__(self, n_in, n_out, activation=F.tanh, highway=1):
+    def __init__(self, n_in, n_out, activation=lambda x:x, highway=1):
         super(FastKNNCell, self).__init__()
-        if n_in != n_out: highway = 0
+        #if n_in != n_out: highway = 0
         self.n_in = n_in
         self.n_out = n_out
         self.highway = highway
@@ -76,7 +76,7 @@ class FastKNNCell(nn.Module):
         self.lambda_op = nn.Linear(n_in, n_out)
 
         if highway:
-            assert n_in == n_out
+            self.input_op2 = nn.Linear(n_in, n_out, bias=False) if n_in != n_out else (lambda x:x)
             self.highway_op = nn.Linear(n_in, n_out)
         else:
             self.highway_op = None
@@ -91,8 +91,9 @@ class FastKNNCell(nn.Module):
         h_1 = self.activation(c_1)
         if self.highway:
             transform = F.sigmoid(self.highway_op(input))
-            # h_1 = h_1*transform + input*(1-transform)
-            h_1 = (h_1-input)*transform + input
+            input2 = self.input_op2(input)
+            # h_1 = h_1*transform + input2*(1-transform)
+            h_1 = (h_1-input2)*transform + input2
         return (h_1, c_1)
 
 class StackedFastKNN(nn.Module):
@@ -130,7 +131,7 @@ class StackedFastKNN(nn.Module):
 
 class FastKNN(nn.Module):
     def __init__(self, n_in, n_out, num_layers=1, dropout=0.0,
-                bidirectional=False, activation=F.tanh, rnn_dropout=0.0, highway=1):
+            bidirectional=False, activation=(lambda x:x), rnn_dropout=0.0, highway=1):
         super(FastKNN, self).__init__()
         assert bidirectional==False, "Bidirectional RNN not supported yet."
         self.n_in = n_in
@@ -188,7 +189,7 @@ class FastKNN(nn.Module):
 
         length, bs = input.size(0), input.size(1)
         n_in, n_out = input.size(2), self.n_out
-        input_op, lambda_op, highway_op = cell.input_op, cell.lambda_op, cell.highway_op
+        input_op, lambda_op, highway_op, input_op2 = cell.input_op, cell.lambda_op, cell.highway_op, cell.input_op2
 
         if self.training and (self.rnn_dropout>0):
             mask_x = self.get_dropout_mask_((bs,n_in), self.rnn_dropout)
@@ -207,7 +208,11 @@ class FastKNN(nn.Module):
         if self.highway:
             transform = highway_op(x_2d).view(length, bs, n_out)
             transform = F.sigmoid(transform)
-            h = h*transform + input*(1-transform)
+            if n_in != n_out:
+                input2 = input_op2(input.view(-1, n_in)).view(length, bs, n_out)
+            else:
+                input2 = input
+            h = h*transform + input2*(1-transform)
 
         return h, c
 
