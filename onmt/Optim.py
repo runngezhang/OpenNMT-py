@@ -18,6 +18,11 @@ class Optim(object):
         else:
             raise RuntimeError("Invalid optim method: " + self.method)
 
+        # copy the init values of parameters
+        if self.opt.decay_method == "dev":
+            self.param_vals = [ p.data.clone() for p in self.params ]
+            self.best_ppl = 1e+30       # best validation ppl
+
     def __init__(self, method, lr, max_grad_norm,
                  lr_decay=1, start_decay_at=None,
                  beta1=0.9, beta2=0.98,
@@ -58,6 +63,21 @@ class Optim(object):
         Decay learning rate if val perf does not improve
         or we hit the start_decay_at limit.
         """
+
+        # decay rate and revert params if ppl > best_ppl
+        if self.opt.decay_method == "dev":
+            if ppl > self.best_ppl:
+                print("Reverting parameter updates of this epoch")
+                for p, v in zip(self.params, self.param_vals):
+                    p.data.copy_(v)
+                self.lr = self.lr * self.lr_decay
+                self.optimizer.param_groups[0]['lr'] = self.lr
+                print("Decaying learning rate to %g" % self.lr)
+            else:
+                self.best_ppl = ppl
+                self.param_vals = [ p.data.clone() for p in self.params ]
+            self.last_ppl = ppl
+            return
 
         if self.start_decay_at is not None and epoch >= self.start_decay_at:
             self.start_decay = True
