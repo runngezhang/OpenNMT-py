@@ -45,6 +45,7 @@ parser.add_argument('-input_feed', type=int, default=1,
 parser.add_argument('-rnn_type', type=str, default='LSTM',
                     choices=['LSTM', 'GRU', 'KNN'],
                     help="""The gate type to use in the RNNs""")
+parser.add_argument("-tanh", type=int, default=1)
 # parser.add_argument('-residual',   action="store_true",
 #                     help="Add residual connections between RNN layers.")
 parser.add_argument('-brnn', action='store_true',
@@ -126,7 +127,7 @@ parser.add_argument('-learning_rate_decay', type=float, default=0.5,
 parser.add_argument('-start_decay_at', type=int, default=8,
                     help="""Start decaying every epoch after and including this
                     epoch""")
-parser.add_argument('-start_checkpoint_at', type=int, default=0,
+parser.add_argument('-start_checkpoint_at', type=int, default=100,
                     help="""Start checkpointing every epoch after and including this
                     epoch""")
 parser.add_argument('-decay_method', type=str, default="",
@@ -413,7 +414,10 @@ def main():
             print('Intializing params')
             for p in model.parameters():
                 print p.data.size()
-                if p.dim() == 2:
+                if p.dim() == 3:
+                    val_range = (3.0/p.size(0))**0.5
+                    p.data.uniform_(-val_range, val_range)
+                elif p.dim() == 2:
                     val_range = (3.0/p.size(1))**0.5
                     p.data.uniform_(-val_range, val_range)
                 else:

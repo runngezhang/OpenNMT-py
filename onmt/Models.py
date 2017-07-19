@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch.autograd import Variable
 import onmt
 import onmt.modules
-from onmt.modules import FastKNN
+from onmt.modules import FastKNN_
 from onmt.modules import aeq
 from onmt.modules.Gate import ContextGateFactory
 from torch.nn.utils.rnn import pad_packed_sequence as unpack
@@ -121,12 +121,21 @@ class Encoder(nn.Module):
             if opt.rnn_type == "GRU":
                 rnn_type = nn.GRU
             elif opt.rnn_type == "KNN":
-                rnn_type = FastKNN
-            self.rnn = rnn_type(
-                 input_size, self.hidden_size,
-                 num_layers=opt.layers,
-                 dropout=opt.dropout,
-                 bidirectional=opt.brnn)
+                rnn_type = FastKNN_
+
+            if opt.rnn_type != "KNN":
+                self.rnn = rnn_type(
+                     input_size, self.hidden_size,
+                     num_layers=opt.layers,
+                     dropout=opt.dropout,
+                     bidirectional=opt.brnn)
+            else:
+                self.rnn = rnn_type(
+                     input_size, self.hidden_size,
+                     num_layers=opt.layers,
+                     dropout=opt.dropout,
+                     bidirectional=opt.brnn,
+                     use_tanh=opt.tanh)
 
     def forward(self, input, lengths=None, hidden=None):
         """
@@ -209,8 +218,12 @@ class Decoder(nn.Module):
                 stackedCell = onmt.modules.StackedGRU
             else:
                 stackedCell = onmt.modules.StackedFastKNN
-            self.rnn = stackedCell(opt.layers, input_size,
-                                   opt.rnn_size, opt.dropout)
+            if opt.rnn_type != "KNN":
+                self.rnn = stackedCell(opt.layers, input_size,
+                                       opt.rnn_size, opt.dropout)
+            else:
+                self.rnn = stackedCell(opt.layers, input_size,
+                                opt.rnn_size, opt.dropout, opt.tanh)
             self.context_gate = None
             if opt.context_gate is not None:
                 self.context_gate = ContextGateFactory(
