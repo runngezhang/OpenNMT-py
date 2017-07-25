@@ -83,7 +83,7 @@ parser.add_argument('-max_generator_batches', type=int, default=32,
                     help="""Maximum batches of words in a sequence to run
                     the generator on in parallel. Higher is faster, but uses
                     more memory.""")
-parser.add_argument('-epochs', type=int, default=13,
+parser.add_argument('-epochs', type=int, default=25,
                     help='Number of training epochs')
 parser.add_argument('-start_epoch', type=int, default=1,
                     help='The epoch from which to start')
@@ -97,6 +97,8 @@ parser.add_argument('-max_grad_norm', type=float, default=5,
                     help="""If the norm of the gradient vector exceeds this,
                     renormalize it to have the norm equal to max_grad_norm""")
 parser.add_argument('-dropout', type=float, default=0.3,
+                    help='Dropout probability; applied between LSTM stacks.')
+parser.add_argument('-rnn_dropout', type=float, default=0.1,
                     help='Dropout probability; applied between LSTM stacks.')
 parser.add_argument('-position_encoding', action='store_true',
                     help='Use a sinusoid to mark relative words positions.')
