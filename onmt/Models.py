@@ -80,7 +80,7 @@ class Embeddings(nn.Module):
         if self.positional_encoding:
             emb = emb + Variable(self.pe[:emb.size(0), :1, :emb.size(2)]
                                  .expand_as(emb))
-            emb = self.dropout(emb)
+        emb = self.dropout(emb)
         return emb
 
 
@@ -134,6 +134,7 @@ class Encoder(nn.Module):
                      input_size, self.hidden_size,
                      num_layers=opt.layers,
                      dropout=opt.dropout,
+                     rnn_dropout = opt.rnn_dropout,
                      bidirectional=opt.brnn,
                      use_tanh=opt.tanh)
 
@@ -220,7 +221,7 @@ class Decoder(nn.Module):
                 stackedCell = onmt.modules.StackedFastKNN
             if opt.rnn_type != "KNN":
                 self.rnn = stackedCell(opt.layers, input_size,
-                                       opt.rnn_size, opt.dropout)
+                                opt.rnn_size, opt.dropout)
             else:
                 self.rnn = stackedCell(opt.layers, input_size,
                                 opt.rnn_size, opt.dropout, opt.tanh)

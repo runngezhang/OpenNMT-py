@@ -15,29 +15,37 @@ tmp_ = torch.rand(1,1).cuda()
 KNN_CODE = """
 extern "C" {
 
-    __forceinline__ __device__ float sigmoidf(float in)
+    __forceinline__ __device__ float sigmoidf(float x)
     {
-        return 1.f / (1.f + expf(-in));
+        return 1.f / (1.f + expf(-x));
     }
 
     __global__ void knn_fwd(const float * __restrict__ u, const float * __restrict__ x,
                             const float * __restrict__ bias, const float * __restrict__ init,
-                            int len, int batch, int d,
+                            const float * __restrict__ mask_h,
+                            const int len, const int batch, const int d, const int k,
                             float * __restrict__ h, float * __restrict__ c,
-                            int use_tanh)
+                            const int use_tanh)
     {
+        assert ((k == 3) || (x == NULL));
+
         int ncols = batch*d;
-        int ncols3 = ncols*3;
         int col = blockIdx.x * blockDim.x + threadIdx.x;
         if (col >= ncols) return;
 
+        int ncols_u = ncols*k;
+        int ncols_x = (k == 3) ? ncols : ncols_u;
+
         const float bias1 = *(bias + (col%d));
         const float bias2 = *(bias + (col%d) + d);
+        const float mask = (mask_h == NULL) ? 1.0 : (*(mask_h + col));
         float cur = *(init + col);
-        const float *up = u + (col*3);
-        const float *xp = x + col;
+
+        const float *up = u + (col*k);
+        const float *xp = (k == 3) ? (x + col) : (up + 3);
         float *cp = c + col;
         float *hp = h + col;
+
         for (int row = 0; row < len; ++row)
         {
             float g1 = sigmoidf((*(up+1))+bias1);
@@ -45,9 +53,9 @@ extern "C" {
             cur = (cur-(*up))*g1 + (*up);
             *cp = cur;
             float val = use_tanh ? tanh(cur) : cur;
-            *hp = (val-(*xp))*g2 + (*xp);
-            up += ncols3;
-            xp += ncols;
+            *hp = (val*mask-(*xp))*g2 + (*xp);
+            up += ncols_u;
+            xp += ncols_x;
             cp += ncols;
             hp += ncols;
         }
@@ -55,32 +63,37 @@ extern "C" {
 
     __global__ void knn_bwd(const float * __restrict__ u, const float * __restrict__ x,
                             const float * __restrict__ bias, const float * __restrict__ init,
-                            const float * __restrict__ c,
-                            const float * __restrict__ grad_h, const float * __restrict__ grad_c,
-                            int len, int batch, int d,
+                            const float * __restrict__ mask_h, const float * __restrict__ c,
+                            const float * __restrict__ grad_h, const float * __restrict__ grad_last,
+                            const int len, const int batch, const int d, const int k,
                             float * __restrict__ grad_u, float * __restrict__ grad_x,
                             float * __restrict__ grad_bias, float * __restrict__ grad_init,
                             int use_tanh)
     {
+        assert((k == 3) || (x == NULL));
+        assert((k == 3) || (grad_x == NULL));
+
         int ncols = batch*d;
-        int ncols3 = ncols*3;
         int col = blockIdx.x * blockDim.x + threadIdx.x;
         if (col >= ncols) return;
 
+        int ncols_u = ncols*k;
+        int ncols_x = (k == 3) ? ncols : ncols_u;
+
         const float bias1 = *(bias + (col%d));
         const float bias2 = *(bias + (col%d) + d);
+        const float mask = (mask_h == NULL) ? 1.0 : (*(mask_h + col));
         float gbias1 = 0;
         float gbias2 = 0;
-        float cur = 0;
+        float cur = *(grad_last + col);
 
-        const float *up = u + (col*3) + (len-1)*ncols3;
-        const float *xp = x + col + (len-1)*ncols;
+        const float *up = u + (col*k) + (len-1)*ncols_u;
+        const float *xp = (k == 3) ? (x + col + (len-1)*ncols) : (up + 3);
         const float *cp = c + col + (len-1)*ncols;
 
         const float *ghp = grad_h + col + (len-1)*ncols;
-        const float *gcp = grad_c + col + (len-1)*ncols;
-        float *gup = grad_u + (col*3) + (len-1)*ncols3;
-        float *gxp = grad_x + col + (len-1)*ncols;
+        float *gup = grad_u + (col*k) + (len-1)*ncols_u;
+        float *gxp = (k == 3) ? (grad_x + col + (len-1)*ncols) : (gup + 3);
 
         for (int row = len-1; row >= 0; --row)
         {
@@ -93,7 +106,6 @@ extern "C" {
             const float prev_c_val = (row>0) ? (*(cp-ncols)) : (*(init+col));
 
             const float gh_val = *ghp;
-            //float gc_val = *gcp;
 
             // h = c*g2 + x*(1-g2) = (c-x)*g2 + x
             // c = c'*g1 + g0*(1-g1) = (c'-g0)*g1 + g0
@@ -102,13 +114,13 @@ extern "C" {
             *gxp = gh_val*(1-g2);
 
             // grad wrt g2, u2 and bias2
-            float gg2 = gh_val*(c_val-x_val)*(g2*(1-g2));
+            float gg2 = gh_val*(c_val*mask-x_val)*(g2*(1-g2));
             *(gup+2) = gg2;
             gbias2 += gg2;
 
             // grad wrt c
             const float tmp = use_tanh ? (g2*(1-c_val*c_val)) : g2;
-            const float gc = gh_val*tmp + (*gcp) + cur;
+            const float gc = gh_val*mask*tmp + cur;
 
             // grad wrt u0
             *gup = gc*(1-g1);
@@ -121,13 +133,12 @@ extern "C" {
             // grad wrt c'
             cur = gc*g1;
 
-            up -= ncols3;
-            xp -= ncols;
+            up -= ncols_u;
+            xp -= ncols_x;
             cp -= ncols;
-            gup -= ncols3;
-            gxp -= ncols;
+            gup -= ncols_u;
+            gxp -= ncols_x;
             ghp -= ncols;
-            gcp -= ncols;
         }
 
         *(grad_bias + col) = gbias1;
@@ -151,30 +162,35 @@ KNN_STREAM = Stream(ptr=torch.cuda.current_stream().cuda_stream)
 
 class KNN_Compute(Function):
 
-    def __init__(self, use_tanh):
+    def __init__(self, use_tanh, d_out):
         super(KNN_Compute, self).__init__()
         self.use_tanh = use_tanh
+        self.d_out = d_out
 
-    def forward(self, u, x, bias, init=None):
+    def forward(self, u, x, bias, init=None, mask_h=None):
         length = x.size(0) if x.dim() == 3 else 1
         batch = x.size(-2)
-        d = x.size(-1)
+        d = self.d_out
+        k = u.size(-1) / d
         ncols = batch*d
         thread_per_block = min(512, ncols)
         num_block = (ncols-1)/thread_per_block+1
 
         init_ = x.new(ncols).zero_() if init is None else init
-        c = x.new(*x.size())
-        h = x.new(*x.size())
+        size = (length, batch, d) if x.dim() == 3 else (batch, d)
+        c = x.new(*size)
+        h = x.new(*size)
 
         KNN_FWD_FUNC(args=[
             u.data_ptr(),
-            x.data_ptr(),
+            x.data_ptr() if k == 3 else 0,
             bias.data_ptr(),
             init_.data_ptr(),
+            mask_h.data_ptr() if mask_h is not None else 0,
             length,
             batch,
             d,
+            k,
             h.data_ptr(),
             c.data_ptr(),
             self.use_tanh],
@@ -182,62 +198,69 @@ class KNN_Compute(Function):
             stream=KNN_STREAM
         )
 
-        self.save_for_backward(u, x, bias, init, c)
+        self.save_for_backward(u, x, bias, init, mask_h)
+        self.intermediate = c
 
-        return h, c
+        return h, c[-1] if x.dim() == 3 else c
 
-    def backward(self, grad_h, grad_c):
-        u, x, bias, init, c = self.saved_tensors
+    def backward(self, grad_h, grad_last):
+        u, x, bias, init, mask_h = self.saved_tensors
+        c = self.intermediate
         length = x.size(0) if x.dim() == 3 else 1
         batch = x.size(-2)
-        d = x.size(-1)
+        d = self.d_out
+        k = u.size(-1) / d
         ncols = batch*d
         thread_per_block = min(512, ncols)
         num_block = (ncols-1)/thread_per_block+1
 
         init_ = x.new(ncols).zero_() if init is None else init
         grad_u = u.new(*u.size())
-        grad_x = x.new(*x.size())
         grad_bias = x.new(2, batch, d)
         grad_init = x.new(batch, d)
+        size = (length, batch, x.size(-1)) if x.dim() == 3 else (batch, x.size(-1))
+        #grad_x = x.new(*x.size()) if k == 3 else x.new(*size).zero_()
+        grad_x = x.new(*x.size()) if k == 3 else None
 
         KNN_BWD_FUNC(args=[
             u.data_ptr(),
-            x.data_ptr(),
+            x.data_ptr() if k == 3 else 0,
             bias.data_ptr(),
             init_.data_ptr(),
+            mask_h.data_ptr() if mask_h is not None else 0,
             c.data_ptr(),
             grad_h.data_ptr(),
-            grad_c.data_ptr(),
+            grad_last.data_ptr(),
             length,
             batch,
             d,
+            k,
             grad_u.data_ptr(),
-            grad_x.data_ptr(),
+            grad_x.data_ptr() if k == 3 else 0,
             grad_bias.data_ptr(),
             grad_init.data_ptr(),
             self.use_tanh],
             block = (thread_per_block,1,1), grid = (num_block,1,1),
             stream=KNN_STREAM
         )
-        return grad_u, grad_x, grad_bias.sum(1).view(-1), grad_init
+        return grad_u, grad_x, grad_bias.sum(1).view(-1), grad_init, None
 
 
 
 class FastKNNCell(nn.Module):
-    def __init__(self, n_in, n_out, dropout=0.0, rnn_dropout=-1, out_dropout=-1, use_tanh=0):
+    def __init__(self, n_in, n_out, dropout=0, rnn_dropout=0, use_tanh=0):
         super(FastKNNCell, self).__init__()
         self.n_in = n_in
         self.n_out = n_out
         self.dropout = dropout
-        self.rnn_dropout = rnn_dropout if rnn_dropout >= 0 else dropout
-        self.out_dropout = out_dropout if out_dropout >= 0 else dropout
+        self.rnn_dropout = rnn_dropout
         self.use_tanh = use_tanh
 
-        self.weight = nn.Parameter(torch.Tensor(n_in, n_out, 3))
-        self.bias = nn.Parameter(torch.Tensor(n_out*2))
         if n_in != n_out:
-            self.transform_op = nn.Linear(n_in, n_out)
+            self.weight = nn.Parameter(torch.Tensor(n_in, n_out, 4))
+        else:
+            self.weight = nn.Parameter(torch.Tensor(n_in, n_out, 3))
+        self.bias = nn.Parameter(torch.Tensor(n_out*2))
 
     def forward(self, input, c0):
         assert input.dim() == 2 or input.dim() == 3
@@ -252,17 +275,17 @@ class FastKNNCell(nn.Module):
 
         x_2d = x if x.dim() == 2 else x.view(-1, n_in)
         u = x_2d.mm(self.weight.view(n_in, -1))
-        if n_in == n_out:
-            h, c = KNN_Compute(self.use_tanh)(u, input, self.bias, c0)
-        else:
-            x_transformed = self.transform_op(x_2d)
-            if input.dim() == 3:
-                x_transformed = x_transformed.view(-1, batch, n_out)
-            h, c = KNN_Compute(self.use_tanh)(u, x_transformed, self.bias, c0)
 
-        if self.training and (self.out_dropout>0):
-            mask_h = self.get_dropout_mask_((batch, n_out), self.out_dropout)
-            h = h * mask_h.expand_as(h)
+        if self.training and (self.dropout>0):
+            mask_h = self.get_dropout_mask_((batch, n_out), self.dropout)
+            h, c = KNN_Compute(self.use_tanh, n_out)(u, input, self.bias, c0, mask_h)
+        else:
+            h, c = KNN_Compute(self.use_tanh, n_out)(u, input, self.bias, c0)
+
+        #h, c = KNN_Compute(self.use_tanh, n_out)(u, input, self.bias, c0, mask_h)
+        #if self.training and (self.rnn_dropout>0):
+        #    mask_h = self.get_dropout_mask_((batch, n_out), self.rnn_dropout)
+        #    h = h * mask_h.expand_as(h)
 
         return h, c
 
@@ -272,12 +295,14 @@ class FastKNNCell(nn.Module):
 
 
 class FastKNN(nn.Module):
-    def __init__(self, n_in, n_out, depth, dropout=0.0,
-                    out_dropout=-1, rnn_dropout=-1, use_tanh=0):
+    def __init__(self, n_in, n_out, depth, dropout=0, rnn_dropout=0, use_tanh=0):
         super(FastKNN, self).__init__()
         self.n_in = n_in
         self.n_out = n_out
         self.depth = depth
+        self.dropout = dropout
+        self.drop_o = nn.Dropout(dropout)
+        self.rnn_dropout = rnn_dropout
         self.rnn_lst = []
         self.seq = nn.Sequential()
 
@@ -285,9 +310,8 @@ class FastKNN(nn.Module):
             l = FastKNNCell(
                 n_in = n_in if i==0 else n_out,
                 n_out = n_out,
-                dropout = dropout,
+                dropout = dropout if i+1 != depth else 0,
                 rnn_dropout = rnn_dropout,
-                out_dropout = out_dropout if i+1 < depth else 0.0,
                 use_tanh = use_tanh
             )
             self.rnn_lst.append(l)
@@ -309,64 +333,50 @@ class FastKNN(nn.Module):
         for i, rnn in enumerate(self.rnn_lst):
             h, c = rnn(prevx, c0[i])
             prevx = h
-            lstc.append(c[-1])
+            lstc.append(c)
 
         return prevx, torch.stack(lstc)
 
-
-def test1():
-    a = Variable(torch.FloatTensor(20, 80, 1024).zero_().add(0.5).cuda())
-    h = Variable(torch.FloatTensor(80, 1024).zero_().add(0.5).cuda())
-    cell = FastKNNCell(1024,1024).cuda()
+def test_fast(D, L, B, N):
+    a = Variable(torch.FloatTensor(L, B, N).zero_().add(0.5).cuda())
+    h = Variable(torch.FloatTensor(D, B, N+1).zero_().add(0.5).cuda())
+    cell = FastKNN(N, N+1, D).cuda()
     start = time.time()
-    for i in range(1000):
+    for i in range(10000):
         out = cell(a, h)
-        out[0].sum().backward()
+        out[0][0,0,0].backward()
     print "test1: {:.6f}".format(
-        (time.time()-start)/1000
+        (time.time()-start)/10000
     )
 
-    L = 5
-    M = 20
-    D = 20
-    input_pair = (
-        Variable(torch.randn(L,M,D*3).float().cuda(), requires_grad=True),
-        Variable(torch.randn(L,M,D).float().cuda(), requires_grad=True),
-        Variable(torch.randn(D*2).float().cuda(), requires_grad=True),
-        Variable(torch.randn(M,D).float().cuda(), requires_grad=True)
-    )
-    test_grad = gradcheck(KNN_Compute(1), input_pair, eps=1e-3, atol=1e-3)
-    print test_grad
-
-#def test2():
-#    a = Variable(torch.FloatTensor(100, 32, 1024).zero_().add(0.5).cuda())
-#    h = Variable(torch.FloatTensor(32, 1024).zero_().add(0.5).cuda())
-#    cell = FastKNNLayer(1024, 1024, activation=lambda x:x, rnn_dropout=0).cuda()
-#    start = time.time()
-#    for i in range(10000):
-#        out = cell(a, (h,h))
-#        out[1].sum().backward()
-#    print "test2: {:.6f}".format(
-#        (time.time()-start)/10000
+#    K = 4
+#    L = 5
+#    M = 20
+#    D = 20
+#    input_pair = (
+#        Variable(torch.randn(L,M,D*K).float().cuda(), requires_grad=True),
+#        Variable(torch.randn(L,M,D).float().cuda(), requires_grad=True),
+#        Variable(torch.randn(D*2).float().cuda(), requires_grad=True),
+#        Variable(torch.randn(M,D).float().cuda(), requires_grad=True)
 #    )
-#
-def test3():
-    a = Variable(torch.FloatTensor(20, 80, 1024).zero_().add(0.5).cuda())
-    h = Variable(torch.FloatTensor(4, 80, 1024).zero_().add(0.5).cuda())
-    cell = nn.LSTM(1024, 1024, 4, dropout=0.0).cuda()
+#    test_grad = gradcheck(KNN_Compute(1), input_pair, eps=1e-3, atol=1e-3)
+#    print test_grad
+
+def test_lstm(D, L, B, N):
+    a = Variable(torch.FloatTensor(L, B, N).zero_().add(0.5).cuda())
+    h = Variable(torch.FloatTensor(D, B, N).zero_().add(0.5).cuda())
+    cell = nn.LSTM(N, N, D, dropout=0.0).cuda()
     start = time.time()
-    for i in range(1000):
+    for i in range(10000):
         out = cell(a, (h,h))
-        out[0].sum().backward()
         #out[0][0,0,0].backward()
     print "test3: {:.6f}".format(
-        (time.time()-start)/1000
+        (time.time()-start)/10000
     )
 
 
 if __name__=="__main__":
-    test1()
-#    test2()
-    test3()
+    test_fast(2, 128, 32, 200)
+    #test_lstm(2, 128, 32, 200)
 
 

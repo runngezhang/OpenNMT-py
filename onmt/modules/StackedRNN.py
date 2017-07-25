@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import cuda_functional as MF
+import cuda_functional2 as MF
 
 
 class StackedLSTM(nn.Module):
@@ -73,7 +73,7 @@ class StackedFastKNN(nn.Module):
         for i in range(num_layers):
             self.layers.append(MF.FastKNNCell(
                 input_size, rnn_size,
-                dropout = dropout,
+                dropout = dropout if i+1 < num_layers else 0.0,
                 use_tanh = use_tanh
             ))
             input_size = rnn_size
@@ -98,12 +98,13 @@ class StackedFastKNN(nn.Module):
 
 
 class FastKNN_(MF.FastKNN):
-    def __init__(self, n_in, n_out, num_layers=1, dropout=0.0,
+    def __init__(self, n_in, n_out, num_layers=1, dropout=0.0, rnn_dropout=0.0,
             bidirectional=False, use_tanh=1):
         super(FastKNN_, self).__init__(
             n_in, n_out,
             depth = num_layers,
             dropout = dropout,
+            rnn_dropout = rnn_dropout,
             use_tanh = use_tanh
         )
         assert bidirectional==False, "Bidirectional RNN not supported yet."
