@@ -7,7 +7,7 @@ class Optim(object):
     def set_parameters(self, params):
         self.params = list(params)  # careful: params may be a generator
         if self.method == 'sgd':
-            self.optimizer = optim.SGD(self.params, lr=self.lr)
+            self.optimizer = optim.SGD(self.params, lr=self.lr, weight_decay=self.opt.weight_decay)
         elif self.method == 'adagrad':
             self.optimizer = optim.Adagrad(self.params, lr=self.lr)
         elif self.method == 'adadelta':

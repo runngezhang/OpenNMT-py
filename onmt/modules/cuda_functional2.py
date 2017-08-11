@@ -180,13 +180,12 @@ class KNN_Compute(Function):
         size = (length, batch, d) if x.dim() == 3 else (batch, d)
         c = x.new(*size)
         h = x.new(*size)
-
         KNN_FWD_FUNC(args=[
-            u.data_ptr(),
-            x.data_ptr() if k == 3 else 0,
+            u.contiguous().data_ptr(),
+            x.contiguous().data_ptr() if k == 3 else 0,
             bias.data_ptr(),
-            init_.data_ptr(),
-            mask_h.data_ptr() if mask_h is not None else 0,
+            init_.contiguous().data_ptr(),
+            mask_h.contiguous().data_ptr() if mask_h is not None else 0,
             length,
             batch,
             d,
@@ -197,7 +196,6 @@ class KNN_Compute(Function):
             block = (thread_per_block,1,1), grid = (num_block,1,1),
             stream=KNN_STREAM
         )
-
         self.save_for_backward(u, x, bias, init, mask_h)
         self.intermediate = c
 
@@ -221,16 +219,15 @@ class KNN_Compute(Function):
         size = (length, batch, x.size(-1)) if x.dim() == 3 else (batch, x.size(-1))
         #grad_x = x.new(*x.size()) if k == 3 else x.new(*size).zero_()
         grad_x = x.new(*x.size()) if k == 3 else None
-
         KNN_BWD_FUNC(args=[
-            u.data_ptr(),
-            x.data_ptr() if k == 3 else 0,
+            u.contiguous().data_ptr(),
+            x.contiguous().data_ptr() if k == 3 else 0,
             bias.data_ptr(),
-            init_.data_ptr(),
-            mask_h.data_ptr() if mask_h is not None else 0,
+            init_.contiguous().data_ptr(),
+            mask_h.contiguous().data_ptr() if mask_h is not None else 0,
             c.data_ptr(),
-            grad_h.data_ptr(),
-            grad_last.data_ptr(),
+            grad_h.contiguous().data_ptr(),
+            grad_last.contiguous().data_ptr(),
             length,
             batch,
             d,
@@ -301,7 +298,6 @@ class FastKNN(nn.Module):
         self.n_out = n_out
         self.depth = depth
         self.dropout = dropout
-        self.drop_o = nn.Dropout(dropout)
         self.rnn_dropout = rnn_dropout
         self.rnn_lst = []
         self.seq = nn.Sequential()
@@ -325,9 +321,9 @@ class FastKNN(nn.Module):
             ).zero_())
             c0 = [ zeros for i in range(self.depth) ]
         else:
+            c0 = c0[0] if isinstance(c0, tuple) else c0
             assert c0.dim() == 3    # (depth, batch, n_out)
-            c0 = c0.chunk(self.depth, 0)
-
+            c0 = [ x.squeeze(0) for x in c0.chunk(self.depth, 0) ]
         prevx = input
         lstc = []
         for i, rnn in enumerate(self.rnn_lst):

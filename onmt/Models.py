@@ -133,7 +133,7 @@ class Encoder(nn.Module):
                 self.rnn = rnn_type(
                      input_size, self.hidden_size,
                      num_layers=opt.layers,
-                     dropout=opt.dropout,
+                     dropout=opt.rnn_dropout,
                      rnn_dropout = opt.rnn_dropout,
                      bidirectional=opt.brnn,
                      use_tanh=opt.tanh)
@@ -212,7 +212,7 @@ class Decoder(nn.Module):
             self.transformer = nn.ModuleList(
                 [onmt.modules.TransformerDecoder(self.hidden_size, opt)
                  for _ in range(opt.layers)])
-        else:
+        elif self.input_feed:
             if opt.rnn_type == "LSTM":
                 stackedCell = onmt.modules.StackedLSTM
             elif opt.rnn_type == "GRU":
@@ -224,14 +224,36 @@ class Decoder(nn.Module):
                                 opt.rnn_size, opt.dropout)
             else:
                 self.rnn = stackedCell(opt.layers, input_size,
-                                opt.rnn_size, opt.dropout, opt.tanh)
+                                opt.rnn_size, opt.rnn_dropout, opt.tanh)
             self.context_gate = None
             if opt.context_gate is not None:
                 self.context_gate = ContextGateFactory(
                     opt.context_gate, opt.word_vec_size,
                     input_size, opt.rnn_size, opt.rnn_size
                 )
+        else:
+            rnn_type = nn.LSTM
+            if opt.rnn_type == "GRU":
+                rnn_type = nn.GRU
+            elif opt.rnn_type == "KNN":
+                rnn_type = FastKNN_
 
+            if opt.rnn_type != "KNN":
+                self.rnn = rnn_type(
+                     input_size, self.hidden_size,
+                     num_layers=opt.layers,
+                     dropout=opt.dropout
+                )
+            else:
+                self.rnn = rnn_type(
+                     input_size, self.hidden_size,
+                     num_layers=opt.layers,
+                     dropout=opt.rnn_dropout,
+                     rnn_dropout = opt.rnn_dropout,
+                     use_tanh=opt.tanh
+                )
+            self.context_gate = None
+            assert opt.context_gate is None
         self.dropout = nn.Dropout(opt.dropout)
 
         # Std attention layer.
@@ -305,7 +327,7 @@ class Decoder(nn.Module):
             if self._copy:
                 attns["copy"] = attn
             state = TransformerDecoderState(input.unsqueeze(2))
-        else:
+        elif self.input_feed:
             assert isinstance(state, RNNDecoderState)
             output = state.input_feed.squeeze(0)
             hidden = state.hidden
@@ -352,6 +374,42 @@ class Decoder(nn.Module):
             outputs = torch.stack(outputs)
             for k in attns:
                 attns[k] = torch.stack(attns[k])
+
+        else:
+            assert isinstance(state, RNNDecoderState)
+
+            # things not supported yet
+            assert self.context_gate is None
+            assert not self._coverage
+            assert not self._copy
+            assert state.coverage is None
+
+            output = state.input_feed.squeeze(0)
+            hidden = state.hidden
+            # CHECKS
+            n_batch_, _ = output.size()
+            aeq(n_batch, n_batch_)
+            # END CHECKS
+
+            #coverage = state.coverage.squeeze(0) \
+            #    if state.coverage is not None else None
+            assert emb.dim() == 3
+            rnn_output, hidden = self.rnn(emb, hidden)
+
+            # emb is (tgt_len, batch, d)
+            # hidden is tuple((batch, d*n_layers))
+            # rnn_output is (tgt_len, batch, d)
+            # context is (src_len, batch, d)
+
+            attn_outputs, attns_ = self.attn.forward_all(
+                rnn_output.transpose(0, 1).contiguous(),
+                context.transpose(0, 1)
+            )
+
+            outputs = self.dropout(attn_outputs)
+            state = RNNDecoderState(hidden, outputs[-1].unsqueeze(0), None)
+            attns['std'] = attns_
+
         return outputs, state, attns
 
 

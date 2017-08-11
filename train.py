@@ -100,6 +100,8 @@ parser.add_argument('-dropout', type=float, default=0.3,
                     help='Dropout probability; applied between LSTM stacks.')
 parser.add_argument('-rnn_dropout', type=float, default=0.1,
                     help='Dropout probability; applied between LSTM stacks.')
+parser.add_argument('-weight_decay', type=float, default=1e-5,
+                    help='')
 parser.add_argument('-position_encoding', action='store_true',
                     help='Use a sinusoid to mark relative words positions.')
 parser.add_argument('-share_decoder_embeddings', action='store_true',

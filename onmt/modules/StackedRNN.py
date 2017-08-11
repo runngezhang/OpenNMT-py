@@ -69,6 +69,7 @@ class StackedFastKNN(nn.Module):
         #self.dropout = nn.Dropout(dropout)
         self.num_layers = num_layers
         self.layers = nn.ModuleList()
+        self.n_out = rnn_size
 
         for i in range(num_layers):
             self.layers.append(MF.FastKNNCell(

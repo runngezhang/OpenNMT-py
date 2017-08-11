@@ -60,6 +60,66 @@ class GlobalAttention(nn.Module):
     def applyMask(self, mask):
         self.mask = mask
 
+    def forward_all(self, input, context):
+        """
+        input (FloatTensor): batch x targetL x dim
+        context (FloatTensor): batch x sourceL x dim
+        """
+        batch, sourceL, dim = context.size()
+        batch_, targetL, dim_ = input.size()
+        aeq(dim, dim_)
+        aeq(batch, batch_)
+        aeq(self.dim, dim)
+        assert self.mask is None
+        assert self.attn_type == "dotprod"
+
+        # (batch, dim, sourceL)
+        context_ = context.transpose(1, 2)
+        aeq(batch, context_.size(0))
+        aeq(dim, context_.size(1))
+        aeq(sourceL, context_.size(2))
+
+        if self.attn_type == "dotprod":
+            # (batch*targetL, dim)
+            input_ = input.view(batch*targetL, dim)
+            # (batch, targetL, dim)
+            targetT = self.linear_in(input_).view(batch, targetL, dim)
+            # (batch, targetL, sourceL)
+            attn = torch.bmm(targetT, context_)
+
+        aeq(batch, attn.size(0))
+        aeq(targetL, attn.size(1))
+        aeq(sourceL, attn.size(2))
+
+        # (batch*targetL, sourceL)
+        attn2 = self.sm(attn.view(batch*targetL, sourceL))
+        # (batch, targetL, sourceL)
+        attn3 = attn2.view(batch, targetL, sourceL)
+
+        # (batch, targetL, dim)
+        weightedContext = torch.bmm(attn3, context)
+
+        # Concatenate the input to context (Luong only)
+        if self.attn_type == "dotprod":
+            weightedContext = torch.cat((weightedContext, input), 2)
+            weightedContext = self.linear_out(weightedContext.view(batch*targetL, dim*2))
+            weightedContext = self.tanh(weightedContext.view(batch, targetL, dim))
+
+        weightedContext = weightedContext.transpose(0, 1)#.contiguous()
+        attn = attn3.transpose(0, 1)#.contiguous()
+
+        #  Check output sizes
+        targetL_, batch_, dim_ = weightedContext.size()
+        aeq(targetL, targetL_)
+        aeq(batch, batch_)
+        aeq(dim, dim_)
+        targetL_, batch_, sourceL_ = attn.size()
+        aeq(targetL, targetL_)
+        aeq(batch, batch_)
+        aeq(sourceL, sourceL_)
+
+        return weightedContext, attn
+
     def forward(self, input, context, coverage=None):
         """
         input (FloatTensor): batch x dim
