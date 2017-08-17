@@ -70,7 +70,7 @@ class GlobalAttention(nn.Module):
         aeq(dim, dim_)
         aeq(batch, batch_)
         aeq(self.dim, dim)
-        assert self.mask is None
+        #assert self.mask is None
         assert self.attn_type == "dotprod"
 
         # (batch, dim, sourceL)
@@ -78,6 +78,11 @@ class GlobalAttention(nn.Module):
         aeq(batch, context_.size(0))
         aeq(dim, context_.size(1))
         aeq(sourceL, context_.size(2))
+
+        if self.mask is not None:
+            beam_, batch_, sourceL_ = self.mask.size()
+            aeq(batch, batch_*beam_)
+            aeq(sourceL, sourceL_)
 
         if self.attn_type == "dotprod":
             # (batch*targetL, dim)
@@ -90,6 +95,9 @@ class GlobalAttention(nn.Module):
         aeq(batch, attn.size(0))
         aeq(targetL, attn.size(1))
         aeq(sourceL, attn.size(2))
+
+        if self.mask is not None:
+            attn.data.masked_fill_(self.mask, -float('inf'))
 
         # (batch*targetL, sourceL)
         attn2 = self.sm(attn.view(batch*targetL, sourceL))
